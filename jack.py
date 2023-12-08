@@ -108,14 +108,21 @@ def embed(symbol: bool, key: int, n_dct, movie_filename, watermarked_filename):
                 array_dct = cv2.dct(array[:,:,CHANNEL]/255)
 
                 # Take dct with smaller coefficient
+
                 smaller_coefs = array_dct[-n_dct-1:-1,-n_dct-1:-1]
+                
+                arr_sz = array_dct.shape
+                midx, midy = arr_sz[0]//2, arr_sz[1]//2
+                
+                smaller_coefs = array_dct[midx-(n_dct//2):midx+(n_dct - n_dct//2), midy-(n_dct//2):midy+(n_dct - n_dct//2)]
+
                 w = np.reshape(G * smaller_coefs.flatten(), (n_dct,n_dct))
 
                 # Add to obtain y
-                array_dct[-n_dct-1:-1, -n_dct-1:-1] += w
+                array_dct[midx-(n_dct//2):midx+(n_dct - n_dct//2), midy-(n_dct//2):midy+(n_dct - n_dct//2)] += w
 
                 # Bounds : check
-                array_dct[-n_dct-1:-1, -n_dct-1:-1] = np.minimum(np.maximum(array_dct[-n_dct-1:-1, -n_dct-1:-1], 0), 1)
+                array_dct[midx-(n_dct//2):midx+(n_dct - n_dct//2), midy-(n_dct//2):midy+(n_dct - n_dct//2)] = np.minimum(np.maximum(array_dct[midx-(n_dct//2):midx+(n_dct - n_dct//2), midy-(n_dct//2):midy+(n_dct - n_dct//2)], 0), 1)
 
                 array[:,:,CHANNEL] = cv2.idct(array_dct*255)
 
