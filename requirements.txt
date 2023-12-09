@@ -3,3 +3,4 @@ numpy
 Pillow
 alive-progress
 opencv-python
+bitstring

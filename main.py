@@ -1,19 +1,7 @@
-'''
-A quick PyAv example that adds a colored square to the middle of a video.
-
-For the purposes of the course, you want to modify and copy the embed
-functions.
-
-Starting at line 100 you have access to a numpy array containing the rgb
-values of the frame.
-
-The author disclaims copyright to this source code.  In place of a legal
-notice, here is a blessing:
-
-  May you do good and not evil.
-  May you find forgiveness for yourself and forgive others.
-  May you share freely, never taking more than you give.
-'''
+"""
+Watermark videos with unique ID using spread spectrum watermarking
+@authors : micronoyau and devilsharu
+"""
 
 import sys
 from typing import Callable
@@ -29,6 +17,11 @@ import numpy as np
 # Cute bar
 from alive_progress import alive_bar
 
+# Bitstream
+from bitstring import ConstBitStream, BitArray, Bits, ReadError
+
+# CLI usage
+import argparse
 
 CHANNEL = 0 # For test purposes
 
@@ -54,158 +47,276 @@ def get_middle_coefs_slice(array_dct: np.array, n_dct: int):
     return array_dct[midx-(n_dct//2):midx+(n_dct - n_dct//2), midy-(n_dct//2):midy+(n_dct - n_dct//2)]
 
 
-def iterate_video_frames(movie_filename: str, watermarked_filename: str, callback: Callable) -> None:
+def open_existing_movie(movie_filename: str):
     """
-    Iterates through the frames of the input video [movie_filename].
-    If [watermarked_filename] is non-null, also creates and writes to video.
-    The core functionnality is provided by [callback], a function that takes
-    a numpy array representing a frame
+    Returns video and audio packets
     """
-    # List containing all the return values from callbacks
-    ret = []
-
     # Opens the stream and packets for video
-    container_input = av.open(movie_filename)
-    input_video_stream = container_input.streams.video[0]
-    input_video_packets = list(container_input.demux(input_video_stream))
+    container = av.open(movie_filename)
+    video_stream = container.streams.video[0]
+    video_packets = list(container.demux(video_stream))
 
     # Opens the stream and packets for audio
-    container_input = av.open(movie_filename)
-    input_audio_stream = container_input.streams.audio[0]
-    input_audio_packets = list(container_input.demux(input_audio_stream))
+    container = av.open(movie_filename)
+    audio_stream = container.streams.audio[0]
+    audio_packets = list(container.demux(audio_stream))
 
-    if watermarked_filename:
-        # Creates a container for the output movie
-        watermarked_container = av.open(watermarked_filename, mode="w")
+    return video_packets, audio_packets, video_stream, audio_stream
 
-        # Specify the video options for the created video
-        codec_name = input_video_stream.codec_context.name
-        fps = input_video_stream.average_rate
-        watermarked_video_stream = watermarked_container.add_stream('libx264', str(fps))
-        watermarked_video_stream.options = {'x264-params': 'keyint=24:min-keyint=24:scenecut=0' }
-        watermarked_video_stream.width = input_video_stream.codec_context.width
-        width = input_video_stream.codec_context.width
-        watermarked_video_stream.height = input_video_stream.codec_context.height
-        height = input_video_stream.codec_context.height
-        watermarked_video_stream.pix_fmt = input_video_stream.codec_context.pix_fmt
 
-        # Specify the audio options for the created video
-        watermarked_audio_stream = watermarked_container.add_stream(template=input_audio_stream)
+def create_movie_from(video_stream, audio_stream, output_filename: str):
+    """
+    Create a video file from video and audio streams
+    """
+    # Creates a container for the output movie
+    output_container = av.open(output_filename, mode="w")
 
-    video_index = 0
-    audio_index = 0
+    # Specify the video options for the created video
+    codec_name = video_stream.codec_context.name
+    fps = video_stream.average_rate
+    output_video_stream = output_container.add_stream('libx264', str(fps))
+    output_video_stream.options = {'x264-params': 'keyint=24:min-keyint=24:scenecut=0' }
+    output_video_stream.width = video_stream.codec_context.width
+    width = video_stream.codec_context.width
+    output_video_stream.height = video_stream.codec_context.height
+    height = video_stream.codec_context.height
+    output_video_stream.pix_fmt = video_stream.codec_context.pix_fmt
 
-    with alive_bar(len(input_video_packets)) as bar:
-        while((audio_index < len(input_audio_packets)) or ((video_index < len(input_video_packets)))):
+    # Specify the audio options for the created video
+    output_audio_stream = output_container.add_stream(template=audio_stream)
+
+    return output_container, output_video_stream, output_audio_stream
+
+
+class VideoIterator:
+    """
+    An iterator to simplify iteration through video and audio packets 
+    """
+
+    def __init__(self, input_video_packets, input_audio_packets, bar=None):
+        self.input_video_packets = input_video_packets
+        self.input_audio_packets = input_audio_packets
+        self.bar = bar
+
+
+    def __iter__(self):
+        self.video_index = 0
+        self.audio_index = 0
+        return self
+
+
+    def __next__(self):
+        if self.audio_index < len(self.input_audio_packets) or self.video_index < len(self.input_video_packets):
             audio_packet = None
+            if self.audio_index < len(self.input_audio_packets):
 
-            if audio_index < len(input_audio_packets):
-                if input_audio_packets[audio_index].dts is None:
-                    audio_index += 1
-                    continue
-                audio_packet = input_audio_packets[audio_index]
+                if self.input_audio_packets[self.audio_index].dts is None:
+                    self.audio_index += 1
+                    return self.__next__()
+
+                audio_packet = self.input_audio_packets[self.audio_index]
 
             video_packet = None
+            if self.video_index < len(self.input_video_packets):
 
-            if video_index < len(input_video_packets):
-                if input_video_packets[video_index].dts is None:
-                    video_index += 1
-                    bar()
-                    continue
-                video_packet = input_video_packets[video_index]
+                if self.input_video_packets[self.video_index].dts is None:
+                    self.video_index += 1
+                    if self.bar:
+                        self.bar()
+                    return self.__next__()
 
+                video_packet = self.input_video_packets[self.video_index]
+
+            if (video_packet is None) or (audio_packet is not None and audio_packet.dts < video_packet.dts):
+                self.audio_index += 1
+            else:
+                self.video_index += 1
+                if self.bar:
+                    self.bar()
+
+            return (video_packet, audio_packet)
+
+        else:
+            raise StopIteration
+
+
+def encode_watermark(symbol: bool, key: int, n_dct: int, alpha: float, movie_filename: str, watermarked_filename: str) -> None:
+    """
+    Encode symbol [symbol] in [watermarked_filename] using private key [key]
+    and spread spectrum parameters [n_dct] (size of modified DCT square) and [alpha] (strength)
+    """
+    G = compute_G(key, n_dct)
+    input_video_packets, input_audio_packets, input_video_stream, input_audio_stream = open_existing_movie(movie_filename)
+    watermarked_container, watermarked_video_stream, watermarked_audio_stream = create_movie_from(input_video_stream, input_audio_stream, watermarked_filename)
+
+    with alive_bar(len(input_video_packets)) as bar:
+        video_iterator = VideoIterator(input_video_packets, input_audio_packets, bar=bar)
+
+        for video_packet, audio_packet in iter(video_iterator):
             if (video_packet is None) or ((audio_packet is not None) and (audio_packet.dts < video_packet.dts)):
-                if watermarked_filename:
-                    audio_packet.stream = watermarked_audio_stream
-                    watermarked_container.mux(audio_packet)
-
-                audio_index += 1
+                audio_packet.stream = watermarked_audio_stream
+                watermarked_container.mux(audio_packet)
                 continue
 
             for frame in video_packet.decode():
                 image = frame.to_image()
                 array = np.array(image)
 
-                ret.append(callback(array))
+                array_dct = cv2.dct(array[:,:,CHANNEL]/255)
+                # Middle coefficients
+                middle_slice = get_middle_coefs_slice(array_dct, n_dct)
+                # Watermark
+                w = np.reshape(alpha * (G if symbol else -G), (n_dct,n_dct))
+                # y = x+w
+                middle_slice += w
+                # Keep DCT coefficients between 0 and 1
+                middle_slice = np.minimum(np.maximum(middle_slice, 0), 1)
+                # Convert back to image from frequency domain
+                array[:,:,CHANNEL] = cv2.idct(array_dct*255)
 
-                if watermarked_filename:
-                    image = Image.fromarray(array)
-                    out_frame = av.VideoFrame.from_image(image)
-                    out_packet = watermarked_video_stream.encode(out_frame)
-                    watermarked_container.mux(out_packet)
-
-            video_index += 1
-            bar()
-
-    if watermarked_filename:
-        try:
-            for packet in watermarked_video_stream.encode():
-                watermarked_container.mux(packet)
-        except EOFError:
-            print("ERROR when writing to video file")
-
-        watermarked_container.close()
-
-    return ret
+                image = Image.fromarray(array)
+                out_frame = av.VideoFrame.from_image(image)
+                out_packet = watermarked_video_stream.encode(out_frame)
+                watermarked_container.mux(out_packet)
 
 
-def encode_core(symbol: bool, G: np.array, n_dct: int, alpha: float, array: np.array) -> None:
+    try:
+        for packet in watermarked_video_stream.encode():
+            watermarked_container.mux(packet)
+
+    except EOFError:
+        print("ERROR when writing to video file")
+
+    watermarked_container.close()
+
+
+def encode_AB(msg: bytes, input_A_filename: str, input_B_filename: str, out_filename: str, freq: float) -> None:
     """
-    Core of encoding function
+    Encode message [msg] in [out_filename] using an A/B encoding procedure
+    with input files [input_A_filename] and [input_B_filename] at frequency [freq]
     """
-    array_dct = cv2.dct(array[:,:,CHANNEL]/255)
-    # Middle coefficients
-    middle_slice = get_middle_coefs_slice(array_dct, n_dct)
-    # Watermark
-    w = np.reshape(alpha * (G if symbol else -G), (n_dct,n_dct))
-    # y = x+w
-    middle_slice += w
-    # Keep DCT coefficients between 0 and 1
-    middle_slice = np.minimum(np.maximum(middle_slice, 0), 1)
-    # Convert back to image from frequency domain
-    array[:,:,CHANNEL] = cv2.idct(array_dct*255)
+    bs = ConstBitStream(msg)[::-1]
+
+    input_A_video_packets, input_A_audio_packets, input_A_video_stream, input_A_audio_stream = open_existing_movie(input_A_filename)
+    input_B_video_packets, input_B_audio_packets, input_B_video_stream, input_B_audio_stream = open_existing_movie(input_B_filename)
+    out_container, out_video_stream, out_audio_stream = create_movie_from(input_A_video_stream, input_A_audio_stream, out_filename)
+
+    assert len(input_A_video_packets) == len(input_B_video_packets)
+    fps = input_A_video_stream.average_rate
+    assert fps == input_B_video_stream.average_rate
+
+    skip_frames = int(fps / freq)
+    frames = 0
+    frame_index = 0
+
+    with alive_bar(len(input_A_video_packets)) as bar:
+        video_iterator_A = VideoIterator(input_A_video_packets, input_A_audio_packets, bar=bar)
+        video_iterator_B = VideoIterator(input_B_video_packets, input_B_audio_packets)
+
+        for (video_packet_A, audio_packet_A), (video_packet_B, audio_packet_B) in zip(iter(video_iterator_A), iter(video_iterator_B)):
+            if (video_packet_A is None) or ((audio_packet_A is not None) and (audio_packet_A.dts < video_packet_A.dts)):
+                audio_packet_A.stream = out_audio_stream
+                out_container.mux(audio_packet_A)
+                continue
+
+            for (f1, f2) in zip(video_packet_A.decode(), video_packet_B.decode()):
+                if frames == 0:
+                    try:
+                        frame_index = bs.read(1).bool
+                    except ReadError: # By default, add
+                        frame_index = 0
+
+                f = (f1,f2)[frame_index]
+
+                out_packet = out_video_stream.encode(f)
+                out_container.mux(out_packet)
+
+                frames = (frames+1) % skip_frames
+
+    try:
+        for packet in out_video_stream.encode():
+            out_container.mux(packet)
+
+    except EOFError:
+        print("ERROR when writing to video file")
+
+    out_container.close()
 
 
-def encode(symbol: bool, key: int, n_dct: int, alpha: float, movie_filename: str, watermarked_filename: str) -> None:
+def decode_AB(key: int, n_dct: int, movie_filename: str, freq: float) -> BitArray:
     """
-    Embeds symbol [symbol] in movie [movie_filename] to produce [watermarked_filename]
-    [key] is the secret key used to generate G
-    The matrix of the middle dct coefs is of size [n_dct]*[n_dct]
-    [symbol] takes value 0 (False) or 1 (True)
-    [alpha] is the power of the watermark
+    Extract message from video [movie_filename]at frequence [freq]
+    with secret key [key] and DCT square size [n_dct]
     """
+    decoded = BitArray()
+
     G = compute_G(key, n_dct)
-    iterate_video_frames(movie_filename, watermarked_filename, lambda array: encode_core(symbol, G, n_dct, alpha, array))
+    video_packets, audio_packets, video_stream, audio_stream = open_existing_movie(movie_filename)
 
+    fps = video_stream.average_rate
 
-def decode_core(G: np.array, n_dct: int, array: np.array) -> bool:
-    """
-    Core of decoding function
-    """
-    array_dct = cv2.dct(array[:,:,CHANNEL]/255)
-    middle_slice = get_middle_coefs_slice(array_dct, n_dct)
-    c = np.dot(G, middle_slice.flatten())
-    return c <= 0 # Reversed compared to the lecture
+    skip_frames = int(fps / freq)
+    frames = 0
+    c = 0 # sum of correlations
 
+    with alive_bar(len(video_packets)) as bar:
+        video_iterator = VideoIterator(video_packets, audio_packets, bar=bar)
 
-## TODO : change this function to extract A/B ##
-def decode(key: int, n_dct: int, movie_filename: str) -> bool:
-    """
-    Decode 1 bit from frame [frame]
-    c = G^T * r with r the attacked-watermarked vector
-    """
-    G = compute_G(key, n_dct)
-    decoded = iterate_video_frames(movie_filename, None, lambda array: decode_core(G, n_dct, array))
-    return False
+        for video_packet, audio_packet in iter(video_iterator):
+            if (video_packet is None) or ((audio_packet is not None) and (audio_packet.dts < video_packet.dts)):
+                continue
+
+            for frame in video_packet.decode():
+                frames = (frames+1) % skip_frames
+
+                if frames == 0:
+                    decoded.append(Bits('0b1' if c<=0 else '0b0'))
+                    c = 0
+                    continue
+
+                image = frame.to_image()
+                array = np.array(image)
+
+                array_dct = cv2.dct(array[:,:,CHANNEL]/255)
+                middle_slice = get_middle_coefs_slice(array_dct, n_dct)
+                c += np.dot(G, middle_slice.flatten())
+
+    return decoded[::-1]
 
 
 if __name__ == '__main__':
-    if len(sys.argv) == 8 and sys.argv[1] == 'encode':
-        encode(sys.argv[2] == '1', int(sys.argv[3]), int(sys.argv[4]), float(sys.argv[5]), sys.argv[6], sys.argv[7])
+    parser = argparse.ArgumentParser(
+                        prog='Nutflex',
+                        description='Watermark ID in video')
 
-    elif len(sys.argv) == 5 and sys.argv[1] == 'decode':
-        decode(int(sys.argv[2]), int(sys.argv[3]), sys.argv[4])
+    parser.add_argument('action', choices=['w', 'e', 'd'], help='w (watermark)\ne (encode using A/B scheme)\nd (decode)')
 
-    else:
-        print("Usage {} encode [symbol] [key] [n_dct] [alpha] [input movie] [watermarked movie]".format(sys.argv[0]))
-        print("      {} decode [key] [n_dct] [watermarked movie]".format(sys.argv[0]))
+    parser.add_argument('-k', '--key', type=int, nargs=1)
+    parser.add_argument('-n', '--n-dct', type=int, nargs=1)
+    parser.add_argument('-i', '--input', type=str, nargs='+', help='Input filename')
+    parser.add_argument('-o', '--output', type=str, nargs=1, help='Output filename')
+    parser.add_argument('-t', '--type', choices=[0,1], type=int, nargs=1, help='Type of watermarking')
+    parser.add_argument('-a', '--alpha', type=float, nargs=1, help='Type of watermarking')
+    parser.add_argument('-m', '--message', type=int, nargs=1, help='Message (ID) to hide')
+    parser.add_argument('-f', '--frequency', type=float, nargs=1, help='Frequency of encoding')
+
+    args = parser.parse_args()
+
+    if args.action == 'w':
+        if None in (args.type, args.key, args.n_dct, args.alpha, args.input, args.input, args.output) or len(args.input) != 1:
+            parser.error('watermarking requires type, key, n-dct, alpha, input and output')
+
+        encode_watermark(args.type[0], args.key[0], args.n_dct[0], args.alpha[0], args.input[0], args.output[0])
+
+    if args.action == 'e':
+        if None in (args.message, args.input, args.output, args.frequency) or len(args.input) != 2:
+            parser.error('encoding requires message, 2 input video files A and B, output and an encoding frequency')
+
+        encode_AB(args.message[0].to_bytes(), args.input[0], args.input[1], args.output[0], args.frequency[0])
+
+    if args.action == 'd':
+        if None in (args.key, args.n_dct, args.input, args.frequency) or len(args.input) != 1:
+            parser.error('decoding requires key, n-dct, input and frequency')
+
+        print(decode_AB(args.key[0], args.n_dct[0], args.input[0], args.frequency[0]).b)
+
