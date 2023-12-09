@@ -258,6 +258,8 @@ def decode_AB(key: int, n_dct: int, movie_filename: str, freq: float) -> BitArra
     skip_frames = int(fps / freq)
     frames = 0
     c = 0 # sum of correlations
+    avg_c = 0
+    c_count = 0
 
     with alive_bar(len(video_packets)) as bar:
         video_iterator = VideoIterator(video_packets, audio_packets, bar=bar)
@@ -270,6 +272,8 @@ def decode_AB(key: int, n_dct: int, movie_filename: str, freq: float) -> BitArra
                 frames = (frames+1) % skip_frames
 
                 if frames == 0:
+                    avg_c += c
+                    c_count += 1
                     decoded.append(Bits('0b1' if c<=0 else '0b0'))
                     c = 0
                     continue
@@ -281,7 +285,7 @@ def decode_AB(key: int, n_dct: int, movie_filename: str, freq: float) -> BitArra
                 middle_slice = get_middle_coefs_slice(array_dct, n_dct)
                 c += np.dot(G, middle_slice.flatten())
 
-    return decoded[::-1]
+    return decoded[::-1], avg_c/c_count
 
 
 if __name__ == '__main__':
@@ -318,5 +322,6 @@ if __name__ == '__main__':
         if None in (args.key, args.n_dct, args.input, args.frequency) or len(args.input) != 1:
             parser.error('decoding requires key, n-dct, input and frequency')
 
-        print(decode_AB(args.key[0], args.n_dct[0], args.input[0], args.frequency[0]).b)
+        res, quality = decode_AB(args.key[0], args.n_dct[0], args.input[0], args.frequency[0])
+        print("Decoded {} with confidence {}".format(res.b, quality))
 
