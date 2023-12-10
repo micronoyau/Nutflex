@@ -315,13 +315,12 @@ if __name__ == '__main__':
     if args.action == 'e':
         if None in (args.message, args.input, args.output, args.frequency) or len(args.input) != 2:
             parser.error('encoding requires message, 2 input video files A and B, output and an encoding frequency')
-
-        encode_AB(args.message[0].to_bytes(), args.input[0], args.input[1], args.output[0], args.frequency[0])
+        encode_AB(args.message[0].to_bytes((args.message[0])+1), args.input[0], args.input[1], args.output[0], args.frequency[0])
 
     if args.action == 'd':
         if None in (args.key, args.n_dct, args.input, args.frequency) or len(args.input) != 1:
             parser.error('decoding requires key, n-dct, input and frequency')
 
         res, quality = decode_AB(args.key[0], args.n_dct[0], args.input[0], args.frequency[0])
-        print("Decoded {} with confidence {}".format(res.b, quality))
+        print("Decoded {} = {}  with confidence {}".format(res.b,res.u, quality))
 
